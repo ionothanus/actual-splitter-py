@@ -47,7 +47,7 @@ def detect_new_shared_transaction(change: Changeset, changed_columns: ChangeDict
 
     return None
 
-def create_refund_transaction(original: Transactions, change: ChangeDict, session: Session):
+def create_deposit_transaction(original: Transactions, change: ChangeDict, session: Session):
     if (original.amount is None):
         raise ValueError("Original transaction has no amount")
     
@@ -141,8 +141,8 @@ def main() -> None:
                 original = detect_new_shared_transaction(change, changed_columns, actual.session, existing_transaction_notes_map)
                 if original is not None:
                     local_changes = True
-                    create_refund_transaction(original, changed_columns, actual.session)
-                    logger.info(f"Created refund transaction for original ID {original.id}")
+                    create_deposit_transaction(original, changed_columns, actual.session)
+                    logger.info(f"Created deposit transaction for original ID {original.id}")
             if local_changes:
                 actual.commit()
 
