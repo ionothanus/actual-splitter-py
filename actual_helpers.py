@@ -103,6 +103,36 @@ def find_correlated_split_transaction(
     return session.exec(statement).first()
 
 
+def delete_split_transaction(
+    session: Session,
+    split_transaction: Transactions,
+) -> bool:
+    """
+    Delete a split transaction by setting its tombstone flag.
+
+    Only deletes if the transaction is not cleared or reconciled.
+
+    Args:
+        session: The Actual database session
+        split_transaction: The split transaction to delete
+
+    Returns:
+        True if deleted, False if skipped (cleared/reconciled)
+    """
+    # Don't modify cleared or reconciled transactions
+    if split_transaction.cleared or split_transaction.reconciled:
+        logger.info(
+            f"Skipping delete for split transaction {split_transaction.id}: "
+            f"cleared={split_transaction.cleared}, reconciled={split_transaction.reconciled}"
+        )
+        return False
+
+    split_transaction.tombstone = True
+    session.flush()
+    logger.debug(f"Deleted split transaction {split_transaction.id}")
+    return True
+
+
 def update_split_transaction(
     session: Session,
     split_transaction: Transactions,

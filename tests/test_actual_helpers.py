@@ -11,6 +11,7 @@ from actual_helpers import (
     create_deposit_transaction,
     create_transaction_from_spliit,
     find_correlated_split_transaction,
+    delete_split_transaction,
     update_split_transaction,
     CORRELATION_PREFIX,
 )
@@ -618,6 +619,60 @@ class TestFindCorrelatedSplitTransaction:
     def test_correlation_prefix_format(self):
         """Test that CORRELATION_PREFIX is correctly defined."""
         assert CORRELATION_PREFIX == "ref:"
+
+
+class TestDeleteSplitTransaction:
+    """Tests for delete_split_transaction function."""
+
+    @pytest.fixture
+    def mock_session(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_split_transaction(self):
+        """Create a mock split transaction that is not cleared/reconciled."""
+        txn = MagicMock()
+        txn.id = "split-123"
+        txn.cleared = False
+        txn.reconciled = False
+        txn.tombstone = False
+        return txn
+
+    def test_deletes_transaction(self, mock_session, mock_split_transaction):
+        """Test that transaction is deleted by setting tombstone."""
+        result = delete_split_transaction(mock_session, mock_split_transaction)
+
+        assert result is True
+        assert mock_split_transaction.tombstone is True
+        mock_session.flush.assert_called_once()
+
+    def test_skips_cleared_transaction(self, mock_session):
+        """Test that cleared transactions are not deleted."""
+        txn = MagicMock()
+        txn.id = "split-123"
+        txn.cleared = True
+        txn.reconciled = False
+        txn.tombstone = False
+
+        result = delete_split_transaction(mock_session, txn)
+
+        assert result is False
+        assert txn.tombstone is False
+        mock_session.flush.assert_not_called()
+
+    def test_skips_reconciled_transaction(self, mock_session):
+        """Test that reconciled transactions are not deleted."""
+        txn = MagicMock()
+        txn.id = "split-123"
+        txn.cleared = False
+        txn.reconciled = True
+        txn.tombstone = False
+
+        result = delete_split_transaction(mock_session, txn)
+
+        assert result is False
+        assert txn.tombstone is False
+        mock_session.flush.assert_not_called()
 
 
 class TestUpdateSplitTransaction:

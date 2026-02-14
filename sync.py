@@ -22,6 +22,7 @@ from actual_helpers import (
     create_deposit_transaction,
     find_correlated_split_transaction,
     update_split_transaction,
+    delete_split_transaction,
 )
 from category_mapping import load_category_mapping
 from spliit_helpers import create_spliit_expense, process_spliit_expenses
@@ -88,8 +89,17 @@ def poll_actual(
                     if table is not Transactions:
                         continue
 
-                    # Deleted transactions are ignored
+                    # Handle deleted transactions - delete correlated split if exists
                     if changed_columns.get("tombstone"):
+                        last_notes = existing_transaction_notes_map.get(change.id)
+                        if last_notes is not None and env_trigger_tag in last_notes:
+                            split_txn = find_correlated_split_transaction(
+                                actual.session, change.id
+                            )
+                            if split_txn is not None:
+                                if delete_split_transaction(actual.session, split_txn):
+                                    local_changes = True
+                                    logger.info(f"Deleted split transaction {split_txn.id} for deleted transaction {change.id}")
                         continue
 
                     # Track if this is a new transaction (for logging)
