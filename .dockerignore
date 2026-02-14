@@ -1,0 +1,32 @@
+# Test files
+tests/
+test_*.py
+*_test.py
+conftest.py
+pytest.ini
+.pytest_cache/
+
+# Development files
+requirements-dev.txt
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build artifacts
+build/
+*.tar
+*.tar.gz
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation
+README.md
