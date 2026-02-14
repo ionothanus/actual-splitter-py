@@ -4,7 +4,7 @@ A Python automation tool that monitors your [Actual Budget](https://actualbudget
 
 ## What it does
 
-When you add the `#shared` tag to a transaction's notes field, this tool automatically:
+When you add the `#shared` tag (or your defined tag) to a transaction's notes field, this tool automatically:
 1. Detects the tagged transaction
 2. Creates a reimbursement transaction for half the amount, associated with the configured payee and account
 3. Tags the reimbursement transaction with `#auto` for easy identification
@@ -19,7 +19,7 @@ This is a useful companion to expense-splitting apps like Spliit, Splitwise, or 
 - Configurable target account and payee for reimbursement deposit transactions
 - Preserves original transaction category on the reimbursement deposit transactions
 - Optional [Spliit](https://spliit.app) integration:
-  - Automatically create Spliit expenses when you tag transactions with `#shared`
+  - Automatically create Spliit expenses when you tag transactions with `#shared` or your defined tag
   - Automatically create Actual transactions when your partner adds expenses in Spliit
 
 ## Requirements
@@ -94,7 +94,7 @@ SPLIIT_PAYER_ID="your-participant-id"
 
 Category mapping works **bidirectionally**:
 - **Spliit → Actual**: When expenses are synced from Spliit, the Spliit category is mapped to an Actual category
-- **Actual → Spliit**: When you tag a transaction with `#shared`, the Actual category is mapped to a Spliit category
+- **Actual → Spliit**: When you tag a transaction with `#shared` or your defined tag, the Actual category is mapped to a Spliit category
 
 The mapping is defined in a JSON file (default: `category-mapping.json`). Copy the example file to get started:
 
@@ -130,7 +130,7 @@ Keys are Spliit category names, values are Actual category names.
 | Transportation | Transportation, Bicycle, Bus/Train, Car, Gas/Fuel, Hotel, Parking, Plane, Taxi |
 | Utilities | Utilities, Cleaning, Electricity, Heat/Gas, Trash, TV/Phone/Internet, Water |
 
-The mapping is bidirectional - when you tag an Actual transaction categorized as "Food" with `#shared`, the expense created in Spliit will be categorized as "Groceries".
+The mapping is bidirectional - when you tag an Actual transaction categorized as "Food" with `#shared` or your defined tag, the expense created in Spliit will be categorized as "Groceries".
 
 **Note on Actual → Spliit mapping:** If multiple Spliit categories map to the same Actual category, the first occurrence in the JSON file is used. For example, if your mapping contains both `"Groceries": "Food"` and `"Dining Out": "Food"`, an Actual transaction categorized as "Food" will be mapped to Spliit's "Groceries" category (whichever appears first in the file).
 
@@ -186,8 +186,13 @@ This keeps your Actual budget in sync with shared expenses your partner tracks i
 
 ## Known Limitations
 
-- Currently only supports 50/50 splits (not configurable ratios)
-- Editing transactions is not currently supported: the #shared tag must be included during the creation of the transaction, and changes after creation will not update the automatically-created deposit transaction
+- For Actual transactions/in the Actual -> Spliit direction:
+  - currently only supports 50/50 splits between you and one defined payee
+  - only supports splitting your expenses + reimbursement; if you owe money to someone in a single transaction, just make a single transaction in Actual without the tag
+- In the Spliit -> Actual direction:
+  - only supports creating Actual transactions for amounts you owe in individual transactions
+  - does not create Actual transactions for reimbursements or for amounts you paid
+- Editing transactions is not currently supported: the #shared tag must be included in the notes during the creation of the transaction, and changes after creation will not update the automatically-created deposit transaction
 - Requires the script to be running continuously to detect changes
 
 ## License
