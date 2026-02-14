@@ -186,19 +186,25 @@ def map_spliit_to_actual_category(
     """
     spliit_category_name = get_spliit_category_name(spliit_category_id)
     if spliit_category_name is None:
+        logger.debug(f"No Spliit category name found for ID {spliit_category_id}")
         return None
 
     # Try full path match first (e.g., "Food and Drink/Groceries")
     if spliit_category_name in category_mapping:
         actual_name = category_mapping[spliit_category_name]
-        return get_actual_category_by_name(session, actual_name)
+        result = get_actual_category_by_name(session, actual_name)
+        logger.debug(f"Mapped Spliit '{spliit_category_name}' -> Actual '{actual_name}' (found: {result is not None})")
+        return result
 
     # Try just the category name (e.g., "Groceries")
     short_name = spliit_category_name.split("/")[-1]
     if short_name in category_mapping:
         actual_name = category_mapping[short_name]
-        return get_actual_category_by_name(session, actual_name)
+        result = get_actual_category_by_name(session, actual_name)
+        logger.debug(f"Mapped Spliit '{short_name}' -> Actual '{actual_name}' (found: {result is not None})")
+        return result
 
+    logger.debug(f"No mapping found for Spliit category '{spliit_category_name}' or '{short_name}'")
     return None
 
 
@@ -487,7 +493,11 @@ def process_spliit_expenses(
         title = expense.get("title", "Unknown expense")
         payer_name = paid_by.get("name", "Unknown")
         expense_date_str = expense.get("expenseDate")
-        spliit_category_id = expense.get("categoryId", 0)
+
+        # Category is an object with id, grouping, name
+        category_obj = expense.get("category", {})
+        spliit_category_id = category_obj.get("id", 0) if category_obj else 0
+        logger.debug(f"Spliit expense '{title}': category = {category_obj}, extracted id = {spliit_category_id}")
 
         # Parse the date (format: "2026-02-13T00:00:00.000Z")
         if expense_date_str:
