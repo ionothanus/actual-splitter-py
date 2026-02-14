@@ -2,7 +2,8 @@
 Main synchronization script for Actual Budget and Spliit integration.
 """
 
-__version__ = "0.3.3"
+__version__ = "0.5.0"
+print(f"Starting Actual-Spliit Sync (version {__version__})")
 
 import time
 import datetime
@@ -19,6 +20,8 @@ from spliit import create_spliit_client_from_env, SpliitClient
 from actual_helpers import (
     detect_new_shared_transaction,
     create_deposit_transaction,
+    find_correlated_split_transaction,
+    update_split_transaction,
 )
 from category_mapping import load_category_mapping
 from spliit_helpers import create_spliit_expense, process_spliit_expenses
@@ -89,12 +92,11 @@ def poll_actual(
                     if changed_columns.get("tombstone"):
                         continue
 
-                    # Only process new transactions
-                    if change.id in transaction_ids:
-                        continue
-
+                    # Track if this is a new transaction (for logging)
+                    is_new_transaction = change.id not in transaction_ids
                     transaction_ids.add(change.id)
 
+                    # Detect newly shared transactions (both new and edited)
                     original = detect_new_shared_transaction(
                         change,
                         changed_columns,
@@ -111,7 +113,8 @@ def poll_actual(
                             env_splitter_payee,
                             env_splitter_account,
                         )
-                        logger.info(f"Created deposit transaction for original ID {original.id}")
+                        action = "new" if is_new_transaction else "edited"
+                        logger.info(f"Created deposit transaction for {action} transaction {original.id}")
 
                         # Also create expense in Spliit if configured
                         if spliit_client:
@@ -125,6 +128,32 @@ def poll_actual(
                                 )
                             except Exception as e:
                                 logger.error(f"Failed to create Spliit expense: {e}")
+                    else:
+                        # Check if this is an edit to an already-shared transaction
+                        # that needs to propagate amount/date/category changes
+                        last_notes = existing_transaction_notes_map.get(change.id)
+                        if last_notes is not None and env_trigger_tag in last_notes:
+                            # Transaction already has trigger tag - check for propagatable changes
+                            new_amount = changed_columns.get("amount")
+                            new_date = changed_columns.get("date")
+                            new_category = changed_columns.get("category")
+
+                            if new_amount is not None or new_date is not None or new_category is not None:
+                                split_txn = find_correlated_split_transaction(
+                                    actual.session, change.id
+                                )
+                                if split_txn is not None:
+                                    if update_split_transaction(
+                                        actual.session,
+                                        split_txn,
+                                        new_amount_cents=int(new_amount) if new_amount is not None else None,
+                                        new_date=int(new_date) if new_date is not None else None,
+                                        new_category_id=str(new_category) if isinstance(new_category, str) else None,
+                                    ):
+                                        local_changes = True
+                                        logger.info(f"Updated split transaction {split_txn.id} for edited transaction {change.id}")
+                                else:
+                                    logger.debug(f"No correlated split transaction found for {change.id}")
 
                 if local_changes:
                     actual.commit()

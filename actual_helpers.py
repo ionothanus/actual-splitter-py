@@ -9,13 +9,16 @@ from decimal import Decimal
 from sqlmodel import Session, select
 from actual import Changeset, Transactions
 from actual.utils.conversions import int_to_date, cents_to_decimal
-from actual.queries import get_payee, get_account, create_transaction
+from actual.queries import get_payee, get_account, create_transaction, create_transaction_from_ids
 from actual.database import Categories
 
 logger = logging.getLogger(__name__)
 
 
 type ChangeDict = dict[str, str | int | bool | None]
+
+
+CORRELATION_PREFIX = "ref:"
 
 
 def get_category_by_name(session: Session, category_name: str) -> Categories | None:
@@ -61,7 +64,9 @@ def detect_new_shared_transaction(
 
     last_notes = existing_transactions.get(changed_obj.id)
     new_notes = changed_columns.get("notes")
-    existing_transactions[changed_obj.id] = new_notes if isinstance(new_notes, str) else None
+    # Only update tracking dict if notes were actually in the changeset
+    if "notes" in changed_columns:
+        existing_transactions[changed_obj.id] = new_notes if isinstance(new_notes, str) else None
 
     # Skip edits to notes that already have the trigger tag
     # We only want to act on the initial addition of the tag
@@ -74,6 +79,86 @@ def detect_new_shared_transaction(
     return None
 
 
+def find_correlated_split_transaction(
+    session: Session,
+    original_transaction_id: str,
+) -> Transactions | None:
+    """
+    Find a split/deposit transaction that was created for a given original transaction.
+
+    Uses the imported_description field which stores 'ref:{original_id}'.
+
+    Args:
+        session: The Actual database session
+        original_transaction_id: The ID of the original #shared transaction
+
+    Returns:
+        The correlated split transaction if found, None otherwise
+    """
+    correlation_ref = f"{CORRELATION_PREFIX}{original_transaction_id}"
+    statement = select(Transactions).where(
+        Transactions.imported_description == correlation_ref,
+        Transactions.tombstone == False,  # noqa: E712
+    )
+    return session.exec(statement).first()
+
+
+def update_split_transaction(
+    session: Session,
+    split_transaction: Transactions,
+    new_amount_cents: int | None = None,
+    new_date: int | None = None,
+    new_category_id: str | None = None,
+) -> bool:
+    """
+    Update a split transaction with new values from the original transaction.
+
+    Only updates if the transaction is not cleared or reconciled.
+
+    Args:
+        session: The Actual database session
+        split_transaction: The split transaction to update
+        new_amount_cents: New amount in cents (will be halved for split)
+        new_date: New date as integer (YYYYMMDD format)
+        new_category_id: New category ID
+
+    Returns:
+        True if updated, False if skipped (cleared/reconciled)
+    """
+    # Don't modify cleared or reconciled transactions
+    if split_transaction.cleared or split_transaction.reconciled:
+        logger.info(
+            f"Skipping update for split transaction {split_transaction.id}: "
+            f"cleared={split_transaction.cleared}, reconciled={split_transaction.reconciled}"
+        )
+        return False
+
+    updated = False
+
+    if new_amount_cents is not None:
+        # Split transaction gets half the original amount (negated for deposit)
+        split_amount = cents_to_decimal(-new_amount_cents) / 2
+        split_transaction.set_amount(split_amount)
+        logger.debug(f"Updated split transaction amount to {split_amount}")
+        updated = True
+
+    if new_date is not None:
+        date_value = int_to_date(new_date)
+        split_transaction.set_date(date_value)
+        logger.debug(f"Updated split transaction date to {date_value}")
+        updated = True
+
+    if new_category_id is not None:
+        split_transaction.category_id = new_category_id
+        logger.debug(f"Updated split transaction category to {new_category_id}")
+        updated = True
+
+    if updated:
+        session.flush()
+
+    return updated
+
+
 def create_deposit_transaction(
     original: Transactions,
     change: ChangeDict,
@@ -81,9 +166,12 @@ def create_deposit_transaction(
     payee_name: str,
     account_name: str,
     auto_tag: str = "#auto",
-) -> None:
+) -> Transactions:
     """
     Create a deposit transaction for half the amount of a shared expense.
+
+    The created transaction stores a reference to the original transaction
+    in the imported_description field for correlation.
 
     Args:
         original: The original transaction being split
@@ -92,6 +180,9 @@ def create_deposit_transaction(
         payee_name: Name of the payee for the deposit
         account_name: Name of the account for the deposit
         auto_tag: Tag to add to the deposit transaction notes
+
+    Returns:
+        The created deposit transaction
     """
     if original.amount is None:
         raise ValueError("Original transaction has no amount")
@@ -99,12 +190,15 @@ def create_deposit_transaction(
     if original.date is None:
         raise ValueError("Original transaction has no date")
 
+    if original.id is None:
+        raise ValueError("Original transaction has no ID")
+
     destination_payee = get_payee(session, payee_name)
     if destination_payee is None:
         raise ValueError(f"Payee '{payee_name}' not found")
 
     destination_account = get_account(session, account_name)
-    if destination_account is None:
+    if destination_account is None or destination_account.id is None:
         raise ValueError(f"Account '{account_name}' not found")
 
     # Get date from change if updated, otherwise from original
@@ -133,17 +227,21 @@ def create_deposit_transaction(
     if original.payee is not None and original.payee.name is not None:
         original_payee_name = original.payee.name
 
-    create_transaction(
+    deposit = create_transaction_from_ids(
         session,
-        account=destination_account,
         date=date_to_use,
-        amount=-amount_to_use / 2,
-        payee=destination_payee,
-        category=category_to_use,
+        account_id=destination_account.id,
+        payee_id=destination_payee.id if destination_payee else None,
         notes=f"{original_payee_name} {auto_tag}",
+        category_id=category_to_use.id if category_to_use else None,
+        amount=-amount_to_use / 2,
     )
 
+    # Store reference to original transaction for edit propagation
+    deposit.imported_description = f"{CORRELATION_PREFIX}{original.id}"
+
     session.flush()
+    return deposit
 
 
 def create_transaction_from_spliit(
