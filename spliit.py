@@ -30,6 +30,7 @@ class SpliitClient:
         self.group_id = group_id
         self.payer_id = payer_id
         self._participants: Optional[list[dict]] = None
+        self._categories: Optional[list[dict]] = None
 
     def _trpc_url(self, procedure: str) -> str:
         """Build the tRPC endpoint URL for a procedure."""
@@ -67,6 +68,63 @@ class SpliitClient:
             if p["id"] == participant_id:
                 return p.get("name", "Unknown")
         return "Unknown"
+
+    def get_categories(self) -> list[dict]:
+        """
+        Fetch all available expense categories (cached).
+
+        Returns:
+            List of category objects with id, grouping, and name.
+        """
+        if self._categories is not None:
+            return self._categories
+
+        url = self._trpc_url("categories.list")
+        response = requests.get(url)
+        response.raise_for_status()
+
+        data = response.json()
+        categories: list[dict] = data["result"]["data"]["json"]["categories"]
+        self._categories = categories
+        logger.debug(f"Loaded {len(categories)} Spliit categories")
+        return categories
+
+    def get_category_name_by_id(self, category_id: int) -> Optional[str]:
+        """
+        Get category name (as "grouping/name") by ID.
+
+        Args:
+            category_id: The category ID
+
+        Returns:
+            Category name in "grouping/name" format, or None if not found.
+        """
+        for cat in self.get_categories():
+            if cat.get("id") == category_id:
+                grouping = cat.get("grouping", "Uncategorized")
+                name = cat.get("name", "General")
+                return f"{grouping}/{name}"
+        return None
+
+    def get_category_id_by_name(self, name: str) -> int:
+        """
+        Get category ID by name.
+
+        Args:
+            name: Category name (either "grouping/name" or just "name")
+
+        Returns:
+            Category ID, or 0 (General) if not found.
+        """
+        for cat in self.get_categories():
+            grouping = cat.get("grouping", "")
+            cat_name = cat.get("name", "")
+            full_name = f"{grouping}/{cat_name}"
+
+            # Match full path or just the name
+            if name == full_name or name == cat_name:
+                return cat.get("id", 0)
+        return 0
 
     def list_expenses(self, limit: int = 50) -> list[dict]:
         """

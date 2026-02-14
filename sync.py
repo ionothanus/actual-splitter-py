@@ -2,6 +2,7 @@ import time
 import datetime
 import os
 import logging
+import threading
 from sys import stdout
 
 from sqlmodel import Session
@@ -29,59 +30,6 @@ env_trigger_tag = os.getenv("ACTUAL_TRIGGER_TAG", "#shared")
 logger = logging.getLogger(__name__)
 logging.getLogger().addHandler(logging.StreamHandler(stdout))
 logger.setLevel(env_logging_level)
-
-
-# Spliit category names mapped to their IDs (from Spliit source code)
-# Format: "grouping/name" -> categoryId
-SPLIIT_CATEGORIES: dict[str, int] = {
-    "Uncategorized/General": 0,
-    "Uncategorized/Payment": 1,
-    "Entertainment/Entertainment": 2,
-    "Entertainment/Games": 3,
-    "Entertainment/Movies": 4,
-    "Entertainment/Music": 5,
-    "Entertainment/Sports": 6,
-    "Food and Drink/Food and Drink": 7,
-    "Food and Drink/Dining Out": 8,
-    "Food and Drink/Groceries": 9,
-    "Food and Drink/Liquor": 10,
-    "Home/Home": 11,
-    "Home/Electronics": 12,
-    "Home/Furniture": 13,
-    "Home/Household Supplies": 14,
-    "Home/Maintenance": 15,
-    "Home/Mortgage": 16,
-    "Home/Pets": 17,
-    "Home/Rent": 18,
-    "Home/Services": 19,
-    "Life/Childcare": 20,
-    "Life/Clothing": 21,
-    "Life/Donation": 22,
-    "Life/Education": 23,
-    "Life/Gifts": 24,
-    "Life/Insurance": 25,
-    "Life/Medical Expenses": 26,
-    "Life/Taxes": 27,
-    "Transportation/Transportation": 28,
-    "Transportation/Bicycle": 29,
-    "Transportation/Bus/Train": 30,
-    "Transportation/Car": 31,
-    "Transportation/Gas/Fuel": 32,
-    "Transportation/Hotel": 33,
-    "Transportation/Parking": 34,
-    "Transportation/Plane": 35,
-    "Transportation/Taxi": 36,
-    "Utilities/Utilities": 37,
-    "Utilities/Cleaning": 38,
-    "Utilities/Electricity": 39,
-    "Utilities/Heat/Gas": 40,
-    "Utilities/Trash": 41,
-    "Utilities/TV/Phone/Internet": 42,
-    "Utilities/Water": 43,
-}
-
-# Reverse mapping: categoryId -> "grouping/name"
-SPLIIT_CATEGORY_BY_ID: dict[int, str] = {v: k for k, v in SPLIIT_CATEGORIES.items()}
 
 
 def load_category_mapping(file_path: str) -> dict[str, str]:
@@ -155,23 +103,11 @@ def get_actual_category_by_name(session: Session, category_name: str) -> Categor
     return session.exec(statement).first()
 
 
-def get_spliit_category_name(category_id: int) -> str | None:
-    """
-    Get the Spliit category name for a category ID.
-
-    Args:
-        category_id: The Spliit category ID
-
-    Returns:
-        The category name (e.g., "Food and Drink/Groceries") or None if not found
-    """
-    return SPLIIT_CATEGORY_BY_ID.get(category_id)
-
-
 def map_spliit_to_actual_category(
     session: Session,
     spliit_category_id: int,
     category_mapping: dict[str, str],
+    spliit_client: SpliitClient,
 ) -> Categories | None:
     """
     Map a Spliit category ID to an Actual category.
@@ -180,11 +116,12 @@ def map_spliit_to_actual_category(
         session: The Actual database session
         spliit_category_id: The Spliit category ID from the expense
         category_mapping: The user-defined category mapping
+        spliit_client: The Spliit client for category lookups
 
     Returns:
         The Actual Categories object if a mapping is found, None otherwise
     """
-    spliit_category_name = get_spliit_category_name(spliit_category_id)
+    spliit_category_name = spliit_client.get_category_name_by_id(spliit_category_id)
     if spliit_category_name is None:
         logger.debug(f"No Spliit category name found for ID {spliit_category_id}")
         return None
@@ -211,6 +148,7 @@ def map_spliit_to_actual_category(
 def map_actual_to_spliit_category(
     actual_category_name: str | None,
     category_mapping: dict[str, str],
+    spliit_client: SpliitClient,
 ) -> int:
     """
     Map an Actual category name to a Spliit category ID.
@@ -218,6 +156,7 @@ def map_actual_to_spliit_category(
     Args:
         actual_category_name: The Actual category name
         category_mapping: The user-defined category mapping (Spliit -> Actual)
+        spliit_client: The Spliit client for category lookups
 
     Returns:
         The Spliit category ID, or 0 (General) if no mapping found
@@ -229,14 +168,8 @@ def map_actual_to_spliit_category(
     # The category_mapping is Spliit -> Actual, so we reverse it
     for spliit_cat, actual_cat in category_mapping.items():
         if actual_cat == actual_category_name:
-            # spliit_cat could be full path or short name
-            # Try full path first
-            if spliit_cat in SPLIIT_CATEGORIES:
-                return SPLIIT_CATEGORIES[spliit_cat]
-            # Try to find it as a short name
-            for full_path, cat_id in SPLIIT_CATEGORIES.items():
-                if full_path.endswith(f"/{spliit_cat}"):
-                    return cat_id
+            # Use spliit_client to look up the category ID
+            return spliit_client.get_category_id_by_name(spliit_cat)
 
     return 0  # Default to "General"
 
@@ -313,7 +246,7 @@ def create_spliit_expense(
     elif original.category is not None:
         actual_category_name = original.category.name
 
-    spliit_category_id = map_actual_to_spliit_category(actual_category_name, category_mapping)
+    spliit_category_id = map_actual_to_spliit_category(actual_category_name, category_mapping, spliit_client)
 
     spliit_client.create_expense(
         title=payee_name,
@@ -512,7 +445,7 @@ def process_spliit_expenses(
 
         # Map Spliit category to Actual category if configured
         actual_category = map_spliit_to_actual_category(
-            session, spliit_category_id, category_mapping
+            session, spliit_category_id, category_mapping, spliit_client
         )
 
         # Create the Actual transaction (negative = expense/money I owe)
@@ -532,6 +465,105 @@ def process_spliit_expenses(
     return created_any
 
 
+def poll_actual(
+    actual: Actual,
+    spliit_client: SpliitClient | None,
+    lock: threading.Lock,
+    stop_event: threading.Event,
+) -> None:
+    """
+    Poll Actual Budget for new transactions with the trigger tag.
+    Runs in its own thread with independent timing.
+    """
+    # Only load the last month of transactions for performance reasons.
+    existing_transactions = get_transactions(
+        actual.session,
+        start_date=datetime.datetime.now().date() - datetime.timedelta(days=30),
+    )
+    existing_transaction_notes_map = {t.id: t.notes for t in existing_transactions if t.id is not None}
+    transaction_ids = {t.id for t in existing_transactions}
+
+    while not stop_event.is_set():
+        try:
+            with lock:
+                changes = actual.sync()
+                logger.debug(f"Detected {len(changes)} Actual changes")
+                logger.debug(changes)
+                local_changes = False
+
+                for change in changes:
+                    changed_columns = {col.name: val for col, val in change.values.items()}
+                    table = change.table
+
+                    if table is not Transactions:
+                        continue
+
+                    # deleted transactions are ignored
+                    if changed_columns.get("tombstone"):
+                        continue
+
+                    # only process new transactions
+                    if change.id in transaction_ids:
+                        continue
+
+                    transaction_ids.add(change.id)
+
+                    original = detect_new_shared_transaction(
+                        change, changed_columns, actual.session, existing_transaction_notes_map
+                    )
+                    if original is not None:
+                        local_changes = True
+                        create_deposit_transaction(original, changed_columns, actual.session)
+                        logger.info(f"Created deposit transaction for original ID {original.id}")
+
+                        # Also create expense in Spliit if configured
+                        if spliit_client:
+                            try:
+                                create_spliit_expense(original, changed_columns, spliit_client, actual.session)
+                            except Exception as e:
+                                logger.error(f"Failed to create Spliit expense: {e}")
+
+                if local_changes:
+                    actual.commit()
+
+                if len(changes) > 0:
+                    # Changesets never seem to apply to the local copy of the database,
+                    # so reload the transaction table when we know there are changes
+                    existing_transactions = get_transactions(
+                        actual.session,
+                        start_date=datetime.datetime.now().date() - datetime.timedelta(days=30),
+                    )
+                    existing_transaction_notes_map = {t.id: t.notes for t in existing_transactions if t.id is not None}
+
+        except Exception as e:
+            logger.error(f"Error in Actual polling loop: {e}")
+
+        time.sleep(env_actual_poll_interval)
+
+
+def poll_spliit(
+    actual: Actual,
+    spliit_client: SpliitClient,
+    processed_spliit_ids: set[str],
+    lock: threading.Lock,
+    stop_event: threading.Event,
+) -> None:
+    """
+    Poll Spliit for new expenses paid by others.
+    Runs in its own thread with independent timing.
+    """
+    while not stop_event.is_set():
+        try:
+            logger.debug("Polling Spliit for new expenses...")
+            with lock:
+                if process_spliit_expenses(spliit_client, actual.session, processed_spliit_ids):
+                    actual.commit()
+        except Exception as e:
+            logger.error(f"Failed to process Spliit expenses: {e}")
+
+        time.sleep(env_spliit_poll_interval)
+
+
 def main() -> None:
     if (env_baseurl is None) or (env_password is None) or (env_budget is None) or (env_splitterpayeeid is None):
         raise ValueError("Missing one of ACTUAL_BASEURL, ACTUAL_PASSWORD, ACTUAL_BUDGET, ACTUAL_SPLITTER_PAYEE_ID in .env")
@@ -544,15 +576,11 @@ def main() -> None:
         logger.info("Spliit integration disabled (SPLIIT_GROUP_ID and SPLIIT_PAYER_ID not set)")
 
     with Actual(base_url=env_baseurl, file=env_budget, password=env_password) as actual:
-        # Only load the last month of transactions for performance reasons.
-        # We'll assume we won't edit transactions older than that for splitting purposes.
-        existing_transactions = get_transactions(actual.session, start_date=datetime.datetime.now().date() - datetime.timedelta(days=30))
-        existing_transaction_notes_map = {t.id: t.notes for t in existing_transactions if t.id is not None}
-
-        transaction_ids = {t.id for t in existing_transactions}
+        # Lock to synchronize access to the Actual session between threads
+        lock = threading.Lock()
+        stop_event = threading.Event()
 
         # Track processed Spliit expense IDs to avoid creating duplicates
-        # Initialize with existing expenses on startup
         processed_spliit_ids: set[str] = set()
         if spliit_client:
             try:
@@ -565,65 +593,39 @@ def main() -> None:
             except Exception as e:
                 logger.warning(f"Failed to load initial Spliit expenses: {e}")
 
-        last_spliit_poll = time.time()
+        # Start polling threads
+        threads: list[threading.Thread] = []
 
-        while True:
-            changes = actual.sync()
-            logger.debug(f"Detected {len(changes)} Actual changes")
-            logger.debug(changes)
-            local_changes = False
-            for change in changes:
-                changed_columns = {col.name: val for col, val in change.values.items()}
+        actual_thread = threading.Thread(
+            target=poll_actual,
+            args=(actual, spliit_client, lock, stop_event),
+            daemon=True,
+            name="ActualPoller",
+        )
+        threads.append(actual_thread)
+        actual_thread.start()
+        logger.info(f"Started Actual polling thread (interval: {env_actual_poll_interval}s)")
 
-                table = change.table
+        if spliit_client:
+            spliit_thread = threading.Thread(
+                target=poll_spliit,
+                args=(actual, spliit_client, processed_spliit_ids, lock, stop_event),
+                daemon=True,
+                name="SpliitPoller",
+            )
+            threads.append(spliit_thread)
+            spliit_thread.start()
+            logger.info(f"Started Spliit polling thread (interval: {env_spliit_poll_interval}s)")
 
-                if (table is not Transactions):
-                    continue
-
-                # deleted transactions are ignored
-                if changed_columns.get("tombstone"):
-                    continue
-
-                # only process new transactions
-                if change.id in transaction_ids:
-                    continue
-
-                transaction_ids.add(change.id)
-
-                original = detect_new_shared_transaction(change, changed_columns, actual.session, existing_transaction_notes_map)
-                if original is not None:
-                    local_changes = True
-                    create_deposit_transaction(original, changed_columns, actual.session)
-                    logger.info(f"Created deposit transaction for original ID {original.id}")
-
-                    # Also create expense in Spliit if configured
-                    if spliit_client:
-                        try:
-                            create_spliit_expense(original, changed_columns, spliit_client, actual.session)
-                        except Exception as e:
-                            logger.error(f"Failed to create Spliit expense: {e}")
-
-            # Poll Spliit for new expenses paid by others (at separate interval)
-            current_time = time.time()
-            if spliit_client and (current_time - last_spliit_poll) >= env_spliit_poll_interval:
-                logger.debug("Polling Spliit for new expenses...")
-                last_spliit_poll = current_time
-                try:
-                    if process_spliit_expenses(spliit_client, actual.session, processed_spliit_ids):
-                        local_changes = True
-                except Exception as e:
-                    logger.error(f"Failed to process Spliit expenses: {e}")
-
-            if local_changes:
-                actual.commit()
-
-            if len(changes) > 0:
-                # Changesets never seem to apply to the local copy of the database,
-                # so reload the transaction table when we know there are changes
-                existing_transactions = get_transactions(actual.session, start_date=datetime.datetime.now().date() - datetime.timedelta(days=30))
-                existing_transaction_notes_map = {t.id: t.notes for t in existing_transactions if t.id is not None}
-
-            time.sleep(env_actual_poll_interval)
+        # Wait for threads (they run forever until interrupted)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
+            stop_event.set()
+            for t in threads:
+                t.join(timeout=5)
 
 if __name__ == "__main__":
     main()
