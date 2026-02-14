@@ -61,6 +61,38 @@ class SpliitClient:
         """Get all participant IDs in the group."""
         return [p["id"] for p in self.get_participants()]
 
+    def get_participant_name(self, participant_id: str) -> str:
+        """Get a participant's name by ID."""
+        for p in self.get_participants():
+            if p["id"] == participant_id:
+                return p.get("name", "Unknown")
+        return "Unknown"
+
+    def list_expenses(self, limit: int = 50) -> list[dict]:
+        """
+        List recent expenses in the group.
+
+        Args:
+            limit: Maximum number of expenses to fetch
+
+        Returns:
+            List of expense objects with id, title, amount, paidBy, paidFor, etc.
+        """
+        url = self._trpc_url("groups.expenses.list")
+        input_data = {
+            "json": {
+                "groupId": self.group_id,
+                "limit": limit,
+            }
+        }
+        params = {"input": json.dumps(input_data)}
+
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+
+        data = response.json()
+        return data["result"]["data"]["json"]["expenses"]
+
     def create_expense(
         self,
         title: str,

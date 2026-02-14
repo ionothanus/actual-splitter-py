@@ -18,7 +18,9 @@ This is a useful companion to expense-splitting apps like Spliit, Splitwise, or 
 - Automatic creation of 50/50 split transactions
 - Configurable target account and payee for reimbursement deposit transactions
 - Preserves original transaction category on the reimbursement deposit transactions
-- Optional [Spliit](https://spliit.app) integration to automatically create expenses in your shared group
+- Optional [Spliit](https://spliit.app) integration:
+  - Automatically create Spliit expenses when you tag transactions with `#shared`
+  - Automatically create Actual transactions when your partner adds expenses in Spliit
 
 ## Requirements
 
@@ -74,6 +76,8 @@ SPLIIT_PAYER_ID="your-participant-id"
 | `ACTUAL_BUDGET` | Name of your budget file | `Budget` |
 | `ACTUAL_SPLITTER_PAYEE_ID` | Payee name for refund transactions | `Adrian` |
 | `ACTUAL_SPLITTER_ACCOUNT_ID` | Account name where refunds are posted | `Chequing` |
+| `ACTUAL_POLL_INTERVAL` | Seconds between Actual Budget sync polls (default: 5) | `5` |
+| `ACTUAL_TRIGGER_TAG` | Tag in transaction notes that triggers splitting (default: `#shared`) | `#shared` |
 | `LOGGING_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | `INFO` |
 
 ### Spliit Integration (Optional)
@@ -83,6 +87,52 @@ SPLIIT_PAYER_ID="your-participant-id"
 | `SPLIIT_BASE_URL` | URL of your Spliit instance (defaults to https://spliit.app) | `https://spliit.app` |
 | `SPLIIT_GROUP_ID` | The ID of your Spliit group (from the URL) | `aBcDeFgHiJk` |
 | `SPLIIT_PAYER_ID` | Your participant ID in the Spliit group | `xYz123AbC` |
+| `SPLIIT_POLL_INTERVAL` | Seconds between Spliit expense polls (default: 30) | `30` |
+| `SPLIIT_CATEGORY_MAPPING_FILE` | Path to category mapping JSON file (default: `category-mapping.json`) | `category-mapping.json` |
+
+#### Category Mapping
+
+Category mapping works **bidirectionally**:
+- **Spliit → Actual**: When expenses are synced from Spliit, the Spliit category is mapped to an Actual category
+- **Actual → Spliit**: When you tag a transaction with `#shared`, the Actual category is mapped to a Spliit category
+
+The mapping is defined in a JSON file (default: `category-mapping.json`). Copy the example file to get started:
+
+```bash
+cp category-mapping.example.json category-mapping.json
+```
+
+**Format:**
+```json
+{
+  "Groceries": "Food",
+  "Dining Out": "Restaurants",
+  "Gas/Fuel": "Auto & Transport",
+  "Electricity": "Utilities"
+}
+```
+
+Keys are Spliit category names, values are Actual category names.
+
+**Spliit category names** can be specified as:
+- Just the category name: `Groceries`, `Dining Out`, `Gas/Fuel`
+- Full path with grouping: `Food and Drink/Groceries`, `Transportation/Gas/Fuel`
+
+**Available Spliit categories:**
+
+| Grouping | Categories |
+|----------|------------|
+| Uncategorized | General, Payment |
+| Entertainment | Entertainment, Games, Movies, Music, Sports |
+| Food and Drink | Food and Drink, Dining Out, Groceries, Liquor |
+| Home | Home, Electronics, Furniture, Household Supplies, Maintenance, Mortgage, Pets, Rent, Services |
+| Life | Childcare, Clothing, Donation, Education, Gifts, Insurance, Medical Expenses, Taxes |
+| Transportation | Transportation, Bicycle, Bus/Train, Car, Gas/Fuel, Hotel, Parking, Plane, Taxi |
+| Utilities | Utilities, Cleaning, Electricity, Heat/Gas, Trash, TV/Phone/Internet, Water |
+
+The mapping is bidirectional - when you tag an Actual transaction categorized as "Food" with `#shared`, the expense created in Spliit will be categorized as "Groceries".
+
+**Note on Actual → Spliit mapping:** If multiple Spliit categories map to the same Actual category, the first occurrence in the JSON file is used. For example, if your mapping contains both `"Groceries": "Food"` and `"Dining Out": "Food"`, an Actual transaction categorized as "Food" will be mapped to Spliit's "Groceries" category (whichever appears first in the file).
 
 To find your Spliit group ID and participant ID:
 1. Open your group in Spliit
@@ -102,6 +152,7 @@ The script will:
 1. Connect to your Actual Budget server
 2. Monitor for changes every 5 seconds
 3. Automatically create deposit transactions when you add `#shared` to a transaction's notes
+4. If Spliit is configured, poll for new expenses and create corresponding Actual transactions
 
 ### Example Workflow
 
@@ -118,6 +169,20 @@ The script will:
    - Amount: $60.00 (full amount)
    - Paid by: You
    - Split: Evenly between all group participants
+
+### Reverse Sync: Spliit to Actual
+
+When your partner adds an expense in Spliit (that you didn't pay for), the tool automatically creates a corresponding transaction in Actual:
+
+1. Your partner pays for groceries: $80.00 and adds it to Spliit
+2. The tool detects the new Spliit expense
+3. An Actual transaction is created:
+   - Account: Your configured splitter account
+   - Payee: Your configured splitter payee
+   - Amount: -$40.00 (your share, as an expense)
+   - Notes: "Groceries (paid by Partner) #spliit"
+
+This keeps your Actual budget in sync with shared expenses your partner tracks in Spliit.
 
 ## Known Limitations
 
