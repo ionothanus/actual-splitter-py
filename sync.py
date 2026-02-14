@@ -2,7 +2,7 @@
 Main synchronization script for Actual Budget and Spliit integration.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 print(f"Starting Actual-Spliit Sync (version {__version__})")
 
 import time
@@ -23,9 +23,16 @@ from actual_helpers import (
     find_correlated_split_transaction,
     update_split_transaction,
     delete_split_transaction,
+    get_spliit_expense_id,
+    update_split_spliit_id,
 )
 from category_mapping import load_category_mapping
-from spliit_helpers import create_spliit_expense, process_spliit_expenses
+from spliit_helpers import (
+    create_spliit_expense,
+    process_spliit_expenses,
+    update_spliit_expense,
+    delete_spliit_expense,
+)
 
 load_dotenv()
 
@@ -97,6 +104,16 @@ def poll_actual(
                                 actual.session, change.id
                             )
                             if split_txn is not None:
+                                # Delete Spliit expense if it exists
+                                if spliit_client:
+                                    spliit_expense_id = get_spliit_expense_id(split_txn)
+                                    if spliit_expense_id:
+                                        try:
+                                            if delete_spliit_expense(spliit_client, spliit_expense_id):
+                                                logger.info(f"Deleted Spliit expense {spliit_expense_id} for deleted transaction {change.id}")
+                                        except Exception as e:
+                                            logger.error(f"Failed to delete Spliit expense: {e}")
+
                                 if delete_split_transaction(actual.session, split_txn):
                                     local_changes = True
                                     logger.info(f"Deleted split transaction {split_txn.id} for deleted transaction {change.id}")
@@ -116,28 +133,34 @@ def poll_actual(
                     )
                     if original is not None:
                         local_changes = True
-                        create_deposit_transaction(
-                            original,
-                            changed_columns,
-                            actual.session,
-                            env_splitter_payee,
-                            env_splitter_account,
-                        )
-                        action = "new" if is_new_transaction else "edited"
-                        logger.info(f"Created deposit transaction for {action} transaction {original.id}")
 
-                        # Also create expense in Spliit if configured
+                        # Create Spliit expense first to get the ID
+                        spliit_expense_id = None
                         if spliit_client:
                             try:
-                                create_spliit_expense(
+                                spliit_expense_id = create_spliit_expense(
                                     original,
                                     changed_columns,
                                     spliit_client,
                                     actual.session,
                                     category_mapping,
                                 )
+                                if spliit_expense_id:
+                                    logger.info(f"Created Spliit expense {spliit_expense_id} for transaction {original.id}")
                             except Exception as e:
                                 logger.error(f"Failed to create Spliit expense: {e}")
+
+                        # Create deposit transaction with Spliit ID
+                        create_deposit_transaction(
+                            original,
+                            changed_columns,
+                            actual.session,
+                            env_splitter_payee,
+                            env_splitter_account,
+                            spliit_expense_id=spliit_expense_id,
+                        )
+                        action = "new" if is_new_transaction else "edited"
+                        logger.info(f"Created deposit transaction for {action} transaction {original.id}")
                     else:
                         # Check if this is an edit to an already-shared transaction
                         # that needs to propagate amount/date/category changes
@@ -162,6 +185,25 @@ def poll_actual(
                                     ):
                                         local_changes = True
                                         logger.info(f"Updated split transaction {split_txn.id} for edited transaction {change.id}")
+
+                                    # Also update Spliit expense if it exists
+                                    if spliit_client:
+                                        spliit_expense_id = get_spliit_expense_id(split_txn)
+                                        if spliit_expense_id:
+                                            try:
+                                                from actual.utils.conversions import int_to_date
+                                                if update_spliit_expense(
+                                                    spliit_client,
+                                                    spliit_expense_id,
+                                                    actual.session,
+                                                    category_mapping,
+                                                    new_amount_cents=int(new_amount) if new_amount is not None else None,
+                                                    new_date=int_to_date(int(new_date)) if new_date is not None else None,
+                                                    new_category_id=str(new_category) if isinstance(new_category, str) else None,
+                                                ):
+                                                    logger.info(f"Updated Spliit expense {spliit_expense_id} for edited transaction {change.id}")
+                                            except Exception as e:
+                                                logger.error(f"Failed to update Spliit expense: {e}")
                                 else:
                                     logger.debug(f"No correlated split transaction found for {change.id}")
 

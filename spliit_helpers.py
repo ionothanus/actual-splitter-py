@@ -22,7 +22,7 @@ def create_spliit_expense(
     spliit_client: SpliitClient,
     session,
     category_mapping: dict[str, str],
-) -> None:
+) -> str | None:
     """
     Create a corresponding expense in Spliit for a shared transaction.
 
@@ -32,6 +32,9 @@ def create_spliit_expense(
         spliit_client: The Spliit API client
         session: The Actual database session
         category_mapping: The user-defined category mapping
+
+    Returns:
+        The Spliit expense ID if created successfully, None otherwise
     """
     if original.amount is None:
         raise ValueError("Original transaction has no amount")
@@ -72,14 +75,119 @@ def create_spliit_expense(
         actual_category_name, category_mapping, spliit_client
     )
 
-    spliit_client.create_expense(
+    result = spliit_client.create_expense(
         title=payee_name,
         amount_cents=amount_cents,
         expense_date=expense_date,
         category=spliit_category_id,
         notes="Auto-created from Actual Budget",
     )
-    logger.info(f"Created Spliit expense for: {payee_name} (category: {spliit_category_id})")
+    expense_id = result.get("expenseId") if result else None
+    logger.debug(f"Created Spliit expense {expense_id} for: {payee_name} (category: {spliit_category_id})")
+    return expense_id
+
+
+def update_spliit_expense(
+    spliit_client: SpliitClient,
+    expense_id: str,
+    session,
+    category_mapping: dict[str, str],
+    new_amount_cents: int | None = None,
+    new_date: datetime.date | None = None,
+    new_category_id: str | None = None,
+) -> bool:
+    """
+    Update an existing Spliit expense.
+
+    Args:
+        spliit_client: The Spliit API client
+        expense_id: The Spliit expense ID to update
+        session: The Actual database session
+        category_mapping: The user-defined category mapping
+        new_amount_cents: New amount in cents (if changed)
+        new_date: New date (if changed)
+        new_category_id: New Actual category ID (if changed)
+
+    Returns:
+        True if updated successfully, False otherwise
+    """
+    # Get the existing expense to preserve unchanged fields
+    existing = spliit_client.get_expense(expense_id)
+    if existing is None:
+        logger.warning(f"Spliit expense {expense_id} not found for update")
+        return False
+
+    # Get current values from existing expense
+    title = existing.get("title", "Unknown")
+    amount_cents = existing.get("amount", 0)
+    expense_date_str = existing.get("expenseDate")
+
+    if expense_date_str:
+        try:
+            expense_date = datetime.datetime.fromisoformat(
+                expense_date_str.replace("Z", "+00:00")
+            ).date()
+        except ValueError:
+            expense_date = datetime.date.today()
+    else:
+        expense_date = datetime.date.today()
+
+    # Get current category
+    category_obj = existing.get("category", {})
+    spliit_category = category_obj.get("id", 0) if category_obj else 0
+
+    # Apply updates
+    if new_amount_cents is not None:
+        amount_cents = abs(new_amount_cents)
+
+    if new_date is not None:
+        expense_date = new_date
+
+    if new_category_id is not None:
+        # Map Actual category to Spliit category
+        cat = session.get(Categories, new_category_id)
+        if cat is not None:
+            spliit_category = map_actual_to_spliit_category(
+                cat.name, category_mapping, spliit_client
+            )
+
+    try:
+        spliit_client.update_expense(
+            expense_id=expense_id,
+            title=title,
+            amount_cents=amount_cents,
+            expense_date=expense_date,
+            category=spliit_category,
+            notes="Auto-updated from Actual Budget",
+        )
+        logger.debug(f"Updated Spliit expense {expense_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update Spliit expense {expense_id}: {e}")
+        return False
+
+
+def delete_spliit_expense(
+    spliit_client: SpliitClient,
+    expense_id: str,
+) -> bool:
+    """
+    Delete a Spliit expense.
+
+    Args:
+        spliit_client: The Spliit API client
+        expense_id: The Spliit expense ID to delete
+
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    try:
+        spliit_client.delete_expense(expense_id)
+        logger.debug(f"Deleted Spliit expense {expense_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to delete Spliit expense {expense_id}: {e}")
+        return False
 
 
 def calculate_my_share(expense: dict, my_participant_id: str) -> int:

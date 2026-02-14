@@ -13,7 +13,12 @@ from actual_helpers import (
     find_correlated_split_transaction,
     delete_split_transaction,
     update_split_transaction,
+    get_spliit_expense_id,
+    update_split_spliit_id,
+    build_correlation_ref,
+    parse_correlation_ref,
     CORRELATION_PREFIX,
+    SPLIIT_PREFIX,
 )
 
 
@@ -620,6 +625,10 @@ class TestFindCorrelatedSplitTransaction:
         """Test that CORRELATION_PREFIX is correctly defined."""
         assert CORRELATION_PREFIX == "ref:"
 
+    def test_spliit_prefix_format(self):
+        """Test that SPLIIT_PREFIX is correctly defined."""
+        assert SPLIIT_PREFIX == "spliit:"
+
 
 class TestDeleteSplitTransaction:
     """Tests for delete_split_transaction function."""
@@ -765,4 +774,116 @@ class TestUpdateSplitTransaction:
         result = update_split_transaction(mock_session, mock_split_transaction)
 
         assert result is False
+        mock_session.flush.assert_not_called()
+
+
+class TestBuildCorrelationRef:
+    """Tests for build_correlation_ref function."""
+
+    def test_builds_ref_without_spliit_id(self):
+        """Test building reference without Spliit ID."""
+        result = build_correlation_ref("original-123")
+        assert result == "ref:original-123"
+
+    def test_builds_ref_with_spliit_id(self):
+        """Test building reference with Spliit ID."""
+        result = build_correlation_ref("original-123", "spliit-456")
+        assert result == "ref:original-123|spliit:spliit-456"
+
+    def test_builds_ref_with_none_spliit_id(self):
+        """Test building reference with None Spliit ID."""
+        result = build_correlation_ref("original-123", None)
+        assert result == "ref:original-123"
+
+
+class TestParseCorrelationRef:
+    """Tests for parse_correlation_ref function."""
+
+    def test_parses_ref_without_spliit_id(self):
+        """Test parsing reference without Spliit ID."""
+        original_id, spliit_id = parse_correlation_ref("ref:original-123")
+        assert original_id == "original-123"
+        assert spliit_id is None
+
+    def test_parses_ref_with_spliit_id(self):
+        """Test parsing reference with Spliit ID."""
+        original_id, spliit_id = parse_correlation_ref("ref:original-123|spliit:spliit-456")
+        assert original_id == "original-123"
+        assert spliit_id == "spliit-456"
+
+    def test_parses_none(self):
+        """Test parsing None returns None for both."""
+        original_id, spliit_id = parse_correlation_ref(None)
+        assert original_id is None
+        assert spliit_id is None
+
+    def test_parses_empty_string(self):
+        """Test parsing empty string returns None for both."""
+        original_id, spliit_id = parse_correlation_ref("")
+        assert original_id is None
+        assert spliit_id is None
+
+
+class TestGetSpliitExpenseId:
+    """Tests for get_spliit_expense_id function."""
+
+    def test_extracts_spliit_id(self):
+        """Test extracting Spliit ID from split transaction."""
+        mock_txn = MagicMock()
+        mock_txn.imported_description = "ref:original-123|spliit:spliit-456"
+
+        result = get_spliit_expense_id(mock_txn)
+        assert result == "spliit-456"
+
+    def test_returns_none_when_no_spliit_id(self):
+        """Test returning None when no Spliit ID in imported_description."""
+        mock_txn = MagicMock()
+        mock_txn.imported_description = "ref:original-123"
+
+        result = get_spliit_expense_id(mock_txn)
+        assert result is None
+
+    def test_returns_none_when_no_imported_description(self):
+        """Test returning None when imported_description is None."""
+        mock_txn = MagicMock()
+        mock_txn.imported_description = None
+
+        result = get_spliit_expense_id(mock_txn)
+        assert result is None
+
+
+class TestUpdateSplitSpliitId:
+    """Tests for update_split_spliit_id function."""
+
+    def test_adds_spliit_id_to_existing_ref(self):
+        """Test adding Spliit ID to existing reference."""
+        mock_session = MagicMock()
+        mock_txn = MagicMock()
+        mock_txn.imported_description = "ref:original-123"
+
+        update_split_spliit_id(mock_session, mock_txn, "spliit-456")
+
+        assert mock_txn.imported_description == "ref:original-123|spliit:spliit-456"
+        mock_session.flush.assert_called_once()
+
+    def test_replaces_existing_spliit_id(self):
+        """Test replacing an existing Spliit ID."""
+        mock_session = MagicMock()
+        mock_txn = MagicMock()
+        mock_txn.imported_description = "ref:original-123|spliit:old-id"
+
+        update_split_spliit_id(mock_session, mock_txn, "new-spliit-id")
+
+        assert mock_txn.imported_description == "ref:original-123|spliit:new-spliit-id"
+        mock_session.flush.assert_called_once()
+
+    def test_does_nothing_when_no_original_id(self):
+        """Test that nothing happens when no original ID in imported_description."""
+        mock_session = MagicMock()
+        mock_txn = MagicMock()
+        mock_txn.imported_description = "something-else"
+
+        update_split_spliit_id(mock_session, mock_txn, "spliit-456")
+
+        assert mock_txn.imported_description == "something-else"
         mock_session.flush.assert_not_called()

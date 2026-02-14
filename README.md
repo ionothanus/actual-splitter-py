@@ -18,9 +18,12 @@ This is a useful companion to expense-splitting apps like Spliit, Splitwise, or 
 - Automatic creation of 50/50 split transactions
 - Configurable target account and payee for reimbursement deposit transactions
 - Preserves original transaction category on the reimbursement deposit transactions
+- **Edit propagation**: Changes to amount, date, or category on `#shared` transactions automatically update the split transaction
+- **Delete propagation**: Deleting a `#shared` transaction automatically deletes the associated split transaction
 - Optional [Spliit](https://spliit.app) integration:
   - Automatically create Spliit expenses when you tag transactions with `#shared` or your defined tag
   - Automatically create Actual transactions when your partner adds expenses in Spliit
+  - Edits and deletes to `#shared` transactions propagate to the corresponding Spliit expense
 
 ## Requirements
 
@@ -170,6 +173,22 @@ The script will:
    - Paid by: You
    - Split: Evenly between all group participants
 
+### Edit and Delete Propagation
+
+Changes you make to `#shared` transactions are automatically propagated:
+
+**Editing**: If you change the amount, date, or category of a `#shared` transaction:
+- The associated split transaction is updated with the new values (amount is recalculated as half)
+- If Spliit is configured, the corresponding Spliit expense is also updated
+
+If you edit a transaction to add the `#shared` tag, it is also processed to create a new split transaction at that time.
+
+**Deleting**: If you delete a `#shared` transaction:
+- The associated split transaction is automatically deleted
+- If Spliit is configured, the corresponding Spliit expense is also deleted
+
+**Safety guards**: Split transactions that have been cleared or reconciled will not be modified or deleted, to prevent accidental changes to finalized records.
+
 ### Reverse Sync: Spliit to Actual
 
 When your partner adds an expense in Spliit (that you didn't pay for), the tool automatically creates a corresponding transaction in Actual:
@@ -186,13 +205,13 @@ This keeps your Actual budget in sync with shared expenses your partner tracks i
 
 ## Known Limitations
 
-- For Actual transactions/in the Actual -> Spliit direction:
-  - currently only supports 50/50 splits between you and one defined payee
-  - only supports splitting your expenses + reimbursement; if you owe money to someone in a single transaction, just make a single transaction in Actual without the tag
-- In the Spliit -> Actual direction:
-  - only supports creating Actual transactions for amounts you owe in individual transactions
-  - does not create Actual transactions for reimbursements or for amounts you paid
-- Editing transactions is not currently supported: the #shared tag must be included in the notes during the creation of the transaction, and changes after creation will not update the automatically-created deposit transaction
+- For Actual transactions/in the Actual → Spliit direction:
+  - Currently only supports 50/50 splits between you and one defined payee
+  - Only supports splitting your expenses + reimbursement; if you owe money to someone in a single transaction, just make a single transaction in Actual without the tag (or create the transaction in Spliit)
+- In the Spliit → Actual direction:
+  - Only supports creating Actual transactions for amounts you owe in individual transactions
+  - Does not create Actual transactions for reimbursements or for amounts you paid
+  - Changes made in Spliit (edits/deletes) are not currently propagated back to Actual
 - Requires the script to be running continuously to detect changes
 
 ## License

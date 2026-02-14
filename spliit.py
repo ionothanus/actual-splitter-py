@@ -233,6 +233,152 @@ class SpliitClient:
         logger.info(f"Created Spliit expense with ID: {result.get('expenseId')}")
         return result
 
+    def update_expense(
+        self,
+        expense_id: str,
+        title: str,
+        amount_cents: int,
+        expense_date: date,
+        category: int = 0,
+        split_mode: str = "EVENLY",
+        is_reimbursement: bool = False,
+        notes: Optional[str] = None,
+        paid_for_participant_ids: Optional[list[str]] = None,
+    ) -> dict:
+        """
+        Update an existing expense in the Spliit group.
+
+        Args:
+            expense_id: The ID of the expense to update
+            title: The expense title/description
+            amount_cents: The amount in cents (e.g., 1000 = $10.00)
+            expense_date: The date of the expense
+            category: Category ID (0 = uncategorized)
+            split_mode: How to split the expense (EVENLY, BY_SHARES, BY_PERCENTAGE, BY_AMOUNT)
+            is_reimbursement: Whether this is a reimbursement
+            notes: Optional notes for the expense
+            paid_for_participant_ids: List of participant IDs who share this expense.
+                                      If None, splits between all participants.
+
+        Returns:
+            The updated expense data.
+        """
+        url = self._trpc_url("groups.expenses.update")
+
+        # If no specific participants provided, split between all
+        if paid_for_participant_ids is None:
+            paid_for_participant_ids = self.get_all_participant_ids()
+
+        # Build the paidFor array - for EVENLY split, shares are equal (100 each = 1.00)
+        paid_for = [
+            {"participant": pid, "shares": 100}
+            for pid in paid_for_participant_ids
+        ]
+
+        expense_form_values = {
+            "title": title,
+            "amount": amount_cents,
+            "expenseDate": expense_date.isoformat(),
+            "category": category,
+            "paidBy": self.payer_id,
+            "paidFor": paid_for,
+            "splitMode": split_mode,
+            "isReimbursement": is_reimbursement,
+            "saveDefaultSplittingOptions": False,
+            "documents": [],
+            "recurrenceRule": "NONE",
+        }
+
+        if notes:
+            expense_form_values["notes"] = notes
+
+        payload = {
+            "json": {
+                "groupId": self.group_id,
+                "expenseId": expense_id,
+                "expenseFormValues": expense_form_values,
+                "participantId": self.payer_id,
+            }
+        }
+
+        logger.debug(f"Updating Spliit expense {expense_id}: {payload}")
+
+        response = requests.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        if not response.ok:
+            logger.error(f"Spliit API error: {response.status_code} - {response.text}")
+        response.raise_for_status()
+
+        data = response.json()
+        result = data["result"]["data"]["json"]
+        logger.info(f"Updated Spliit expense: {expense_id}")
+        return result
+
+    def delete_expense(self, expense_id: str) -> dict:
+        """
+        Delete an expense from the Spliit group.
+
+        Args:
+            expense_id: The ID of the expense to delete
+
+        Returns:
+            The API response data.
+        """
+        url = self._trpc_url("groups.expenses.delete")
+
+        payload = {
+            "json": {
+                "groupId": self.group_id,
+                "expenseId": expense_id,
+            }
+        }
+
+        logger.debug(f"Deleting Spliit expense: {expense_id}")
+
+        response = requests.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        if not response.ok:
+            logger.error(f"Spliit API error: {response.status_code} - {response.text}")
+        response.raise_for_status()
+
+        data = response.json()
+        result = data["result"]["data"]["json"]
+        logger.info(f"Deleted Spliit expense: {expense_id}")
+        return result
+
+    def get_expense(self, expense_id: str) -> Optional[dict]:
+        """
+        Get a single expense by ID.
+
+        Args:
+            expense_id: The ID of the expense to fetch
+
+        Returns:
+            The expense data, or None if not found.
+        """
+        url = self._trpc_url("groups.expenses.get")
+        input_data = {
+            "json": {
+                "groupId": self.group_id,
+                "expenseId": expense_id,
+            }
+        }
+        params = {"input": json.dumps(input_data)}
+
+        response = requests.get(url, params=params)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+
+        data = response.json()
+        return data["result"]["data"]["json"]["expense"]
+
 
 def create_spliit_client_from_env() -> Optional[SpliitClient]:
     """

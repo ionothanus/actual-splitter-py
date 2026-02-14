@@ -19,6 +19,52 @@ type ChangeDict = dict[str, str | int | bool | None]
 
 
 CORRELATION_PREFIX = "ref:"
+SPLIIT_PREFIX = "spliit:"
+
+
+def build_correlation_ref(original_id: str, spliit_id: str | None = None) -> str:
+    """
+    Build the correlation reference string for imported_description.
+
+    Format: ref:{original_id} or ref:{original_id}|spliit:{spliit_id}
+
+    Args:
+        original_id: The original Actual transaction ID
+        spliit_id: The Spliit expense ID (optional)
+
+    Returns:
+        The correlation reference string
+    """
+    ref = f"{CORRELATION_PREFIX}{original_id}"
+    if spliit_id:
+        ref += f"|{SPLIIT_PREFIX}{spliit_id}"
+    return ref
+
+
+def parse_correlation_ref(imported_description: str | None) -> tuple[str | None, str | None]:
+    """
+    Parse the correlation reference string from imported_description.
+
+    Args:
+        imported_description: The imported_description field value
+
+    Returns:
+        Tuple of (original_transaction_id, spliit_expense_id), either may be None
+    """
+    if not imported_description:
+        return None, None
+
+    original_id = None
+    spliit_id = None
+
+    parts = imported_description.split("|")
+    for part in parts:
+        if part.startswith(CORRELATION_PREFIX):
+            original_id = part[len(CORRELATION_PREFIX):]
+        elif part.startswith(SPLIIT_PREFIX):
+            spliit_id = part[len(SPLIIT_PREFIX):]
+
+    return original_id, spliit_id
 
 
 def get_category_by_name(session: Session, category_name: str) -> Categories | None:
@@ -86,7 +132,8 @@ def find_correlated_split_transaction(
     """
     Find a split/deposit transaction that was created for a given original transaction.
 
-    Uses the imported_description field which stores 'ref:{original_id}'.
+    Uses the imported_description field which stores 'ref:{original_id}' or
+    'ref:{original_id}|spliit:{spliit_id}'.
 
     Args:
         session: The Actual database session
@@ -95,12 +142,47 @@ def find_correlated_split_transaction(
     Returns:
         The correlated split transaction if found, None otherwise
     """
-    correlation_ref = f"{CORRELATION_PREFIX}{original_transaction_id}"
+    correlation_prefix = f"{CORRELATION_PREFIX}{original_transaction_id}"
     statement = select(Transactions).where(
-        Transactions.imported_description == correlation_ref,
+        Transactions.imported_description.startswith(correlation_prefix),  # type: ignore
         Transactions.tombstone == False,  # noqa: E712
     )
     return session.exec(statement).first()
+
+
+def get_spliit_expense_id(split_transaction: Transactions) -> str | None:
+    """
+    Extract the Spliit expense ID from a split transaction's imported_description.
+
+    Args:
+        split_transaction: The split transaction to extract from
+
+    Returns:
+        The Spliit expense ID if found, None otherwise
+    """
+    _, spliit_id = parse_correlation_ref(split_transaction.imported_description)
+    return spliit_id
+
+
+def update_split_spliit_id(
+    session: Session,
+    split_transaction: Transactions,
+    spliit_expense_id: str,
+) -> None:
+    """
+    Update a split transaction to include the Spliit expense ID.
+
+    Args:
+        session: The Actual database session
+        split_transaction: The split transaction to update
+        spliit_expense_id: The Spliit expense ID to add
+    """
+    original_id, _ = parse_correlation_ref(split_transaction.imported_description)
+    if original_id:
+        split_transaction.imported_description = build_correlation_ref(
+            original_id, spliit_expense_id
+        )
+        session.flush()
 
 
 def delete_split_transaction(
@@ -196,12 +278,13 @@ def create_deposit_transaction(
     payee_name: str,
     account_name: str,
     auto_tag: str = "#auto",
+    spliit_expense_id: str | None = None,
 ) -> Transactions:
     """
     Create a deposit transaction for half the amount of a shared expense.
 
     The created transaction stores a reference to the original transaction
-    in the imported_description field for correlation.
+    and optionally the Spliit expense ID in the imported_description field.
 
     Args:
         original: The original transaction being split
@@ -210,6 +293,7 @@ def create_deposit_transaction(
         payee_name: Name of the payee for the deposit
         account_name: Name of the account for the deposit
         auto_tag: Tag to add to the deposit transaction notes
+        spliit_expense_id: The Spliit expense ID (optional)
 
     Returns:
         The created deposit transaction
@@ -267,8 +351,8 @@ def create_deposit_transaction(
         amount=-amount_to_use / 2,
     )
 
-    # Store reference to original transaction for edit propagation
-    deposit.imported_description = f"{CORRELATION_PREFIX}{original.id}"
+    # Store reference to original transaction and Spliit expense for edit propagation
+    deposit.imported_description = build_correlation_ref(original.id, spliit_expense_id)
 
     session.flush()
     return deposit
