@@ -141,7 +141,8 @@ def poll_actual(
         except Exception as e:
             logger.error(f"Error in Actual polling loop: {e}")
 
-        time.sleep(env_actual_poll_interval)
+        # Use wait() instead of sleep() so we wake up immediately on stop_event
+        stop_event.wait(env_actual_poll_interval)
 
 
 def poll_spliit(
@@ -175,7 +176,8 @@ def poll_spliit(
         except Exception as e:
             logger.error(f"Failed to process Spliit expenses: {e}")
 
-        time.sleep(env_spliit_poll_interval)
+        # Use wait() instead of sleep() so we wake up immediately on stop_event
+        stop_event.wait(env_spliit_poll_interval)
 
 
 def main() -> None:
