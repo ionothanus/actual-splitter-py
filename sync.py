@@ -2,6 +2,8 @@
 Main synchronization script for Actual Budget and Spliit integration.
 """
 
+__version__ = "0.3.2"
+
 import time
 import datetime
 import os
