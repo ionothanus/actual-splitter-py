@@ -11,6 +11,8 @@ from actual.queries import get_transactions, get_payee, get_account, create_tran
 from actual.database import Categories
 from dotenv import load_dotenv
 
+from spliit import create_spliit_client_from_env, SpliitClient
+
 load_dotenv()
 
 env_baseurl = os.getenv("ACTUAL_BASEURL")
@@ -46,6 +48,47 @@ def detect_new_shared_transaction(change: Changeset, changed_columns: ChangeDict
         return changed_obj
 
     return None
+
+def create_spliit_expense(
+    original: Transactions,
+    change: ChangeDict,
+    spliit_client: SpliitClient,
+) -> None:
+    """Create a corresponding expense in Spliit for a shared transaction."""
+    if original.amount is None:
+        raise ValueError("Original transaction has no amount")
+
+    if original.date is None:
+        raise ValueError("Original transaction has no date")
+
+    # Get the amount from the change if it was updated, otherwise from original
+    new_amount = change.get("amount")
+    if new_amount is not None:
+        amount_cents = abs(int(new_amount))
+    else:
+        # original.amount is in cents, negative for expenses
+        amount_cents = abs(original.amount)
+
+    # Get the date from the change if it was updated, otherwise from original
+    new_date = change.get("date")
+    if new_date is not None:
+        expense_date = int_to_date(int(new_date))
+    else:
+        expense_date = original.get_date()
+
+    # Build the title from the payee name
+    payee_name = "Unknown payee"
+    if original.payee is not None and original.payee.name is not None:
+        payee_name = original.payee.name
+
+    spliit_client.create_expense(
+        title=payee_name,
+        amount_cents=amount_cents,
+        expense_date=expense_date,
+        notes=f"Auto-created from Actual Budget",
+    )
+    logger.info(f"Created Spliit expense for: {payee_name}")
+
 
 def create_deposit_transaction(original: Transactions, change: ChangeDict, session: Session):
     if (original.amount is None):
@@ -108,6 +151,13 @@ def main() -> None:
     if (env_baseurl is None) or (env_password is None) or (env_budget is None) or (env_splitterpayeeid is None):
         raise ValueError("Missing one of ACTUAL_BASEURL, ACTUAL_PASSWORD, ACTUAL_BUDGET, ACTUAL_SPLITTER_PAYEE_ID in .env")
 
+    # Initialize Spliit client (optional - will be None if env vars not set)
+    spliit_client = create_spliit_client_from_env()
+    if spliit_client:
+        logger.info("Spliit integration enabled")
+    else:
+        logger.info("Spliit integration disabled (SPLIIT_GROUP_ID and SPLIIT_PAYER_ID not set)")
+
     with Actual(base_url=env_baseurl, file=env_budget, password=env_password) as actual:
         # Only load the last month of transactions for performance reasons.
         # We'll assume we won't edit transactions older than that for splitting purposes.
@@ -129,7 +179,7 @@ def main() -> None:
                     continue
 
                 # deleted transactions are ignored
-                if (changed_columns.get("tombstone") is not None):
+                if changed_columns.get("tombstone"):
                     continue
 
                 # only process new transactions
@@ -143,6 +193,13 @@ def main() -> None:
                     local_changes = True
                     create_deposit_transaction(original, changed_columns, actual.session)
                     logger.info(f"Created deposit transaction for original ID {original.id}")
+
+                    # Also create expense in Spliit if configured
+                    if spliit_client:
+                        try:
+                            create_spliit_expense(original, changed_columns, spliit_client)
+                        except Exception as e:
+                            logger.error(f"Failed to create Spliit expense: {e}")
             if local_changes:
                 actual.commit()
 

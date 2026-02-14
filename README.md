@@ -8,8 +8,9 @@ When you add the `#shared` tag to a transaction's notes field, this tool automat
 1. Detects the tagged transaction
 2. Creates a reimbursement transaction for half the amount, associated with the configured payee and account
 3. Tags the reimbursement transaction with `#auto` for easy identification
+4. Optionally creates a corresponding expense in [Spliit](https://spliit.app) for tracking shared expenses with your partner
 
-This is a useful companion to tools like Splitwise or Tricount, for couples or roommates who split expenses in half by default.
+This is a useful companion to expense-splitting apps like Spliit, Splitwise, or Tricount, for couples or roommates who split expenses in half by default.
 
 ## Features
 
@@ -17,6 +18,7 @@ This is a useful companion to tools like Splitwise or Tricount, for couples or r
 - Automatic creation of 50/50 split transactions
 - Configurable target account and payee for reimbursement deposit transactions
 - Preserves original transaction category on the reimbursement deposit transactions
+- Optional [Spliit](https://spliit.app) integration to automatically create expenses in your shared group
 
 ## Requirements
 
@@ -56,6 +58,11 @@ ACTUAL_BUDGET="Your Budget Name"
 ACTUAL_SPLITTER_PAYEE_ID="Partner Name"
 ACTUAL_SPLITTER_ACCOUNT_ID="Target Account"
 LOGGING_LEVEL="INFO"
+
+# Optional: Spliit integration
+SPLIIT_BASE_URL="https://spliit.app"  # Or your self-hosted instance
+SPLIIT_GROUP_ID="your-group-id"
+SPLIIT_PAYER_ID="your-participant-id"
 ```
 
 ## Configuration
@@ -68,6 +75,21 @@ LOGGING_LEVEL="INFO"
 | `ACTUAL_SPLITTER_PAYEE_ID` | Payee name for refund transactions | `Adrian` |
 | `ACTUAL_SPLITTER_ACCOUNT_ID` | Account name where refunds are posted | `Chequing` |
 | `LOGGING_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+
+### Spliit Integration (Optional)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `SPLIIT_BASE_URL` | URL of your Spliit instance (defaults to https://spliit.app) | `https://spliit.app` |
+| `SPLIIT_GROUP_ID` | The ID of your Spliit group (from the URL) | `aBcDeFgHiJk` |
+| `SPLIIT_PAYER_ID` | Your participant ID in the Spliit group | `xYz123AbC` |
+
+To find your Spliit group ID and participant ID:
+1. Open your group in Spliit
+2. The group ID is in the URL: `https://spliit.app/groups/{GROUP_ID}`
+3. Open browser developer tools (F12), go to the Network tab
+4. Click on any expense or refresh the page
+5. Look for a request to `/api/trpc/groups.get` - the response will contain participant IDs
 
 ## Usage
 
@@ -91,6 +113,11 @@ The script will:
    - Amount: -$30.00 (half of the original)
    - Category: Same as the original transaction
    - Notes: "Food Restaurant #auto"
+4. If Spliit is configured, an expense is also created in your Spliit group:
+   - Title: "Food Restaurant"
+   - Amount: $60.00 (full amount)
+   - Paid by: You
+   - Split: Evenly between all group participants
 
 ## Known Limitations
 
