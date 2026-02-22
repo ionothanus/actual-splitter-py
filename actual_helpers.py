@@ -11,6 +11,7 @@ from actual import Changeset, Transactions
 from actual.utils.conversions import int_to_date, cents_to_decimal
 from actual.queries import get_payee, get_account, create_transaction, create_transaction_from_ids
 from actual.database import Categories
+from actual.crypto import is_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,13 @@ def create_deposit_transaction(
         raise ValueError(f"Payee '{payee_name}' not found")
 
     destination_account = get_account(session, account_name)
-    if destination_account is None or destination_account.id is None:
+    if destination_account is not None and destination_account.id is not None:
+        account_id = destination_account.id
+    elif is_uuid(account_name):
+        # Account row is missing from local DB (e.g. server sync issue) but UUID is valid
+        logger.warning(f"Account '{account_name}' not found in local DB; using UUID directly")
+        account_id = account_name
+    else:
         raise ValueError(f"Account '{account_name}' not found")
 
     # Get date from change if updated, otherwise from original
@@ -344,7 +351,7 @@ def create_deposit_transaction(
     deposit = create_transaction_from_ids(
         session,
         date=date_to_use,
-        account_id=destination_account.id,
+        account_id=account_id,
         payee_id=destination_payee.id if destination_payee else None,
         notes=f"{original_payee_name} {auto_tag}",
         category_id=category_to_use.id if category_to_use else None,
@@ -388,15 +395,27 @@ def create_transaction_from_spliit(
         raise ValueError(f"Payee '{payee_name}' not found")
 
     destination_account = get_account(session, account_name)
-    if destination_account is None:
+    if destination_account is not None:
+        create_transaction(
+            session,
+            account=destination_account,
+            date=date,
+            amount=cents_to_decimal(-amount_cents),  # negative = expense
+            payee=destination_payee,
+            category=category,
+            notes=f"{title} (paid by {payer_name}) {tag}",
+        )
+    elif is_uuid(account_name):
+        # Account row is missing from local DB (e.g. server sync issue) but UUID is valid
+        logger.warning(f"Account '{account_name}' not found in local DB; using UUID directly")
+        create_transaction_from_ids(
+            session,
+            date=date,
+            account_id=account_name,
+            payee_id=destination_payee.id if destination_payee else None,
+            notes=f"{title} (paid by {payer_name}) {tag}",
+            category_id=category.id if category else None,
+            amount=cents_to_decimal(-amount_cents),  # negative = expense
+        )
+    else:
         raise ValueError(f"Account '{account_name}' not found")
-
-    create_transaction(
-        session,
-        account=destination_account,
-        date=date,
-        amount=cents_to_decimal(-amount_cents),  # negative = expense
-        payee=destination_payee,
-        category=category,
-        notes=f"{title} (paid by {payer_name}) {tag}",
-    )

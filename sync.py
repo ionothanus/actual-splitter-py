@@ -2,7 +2,7 @@
 Main synchronization script for Actual Budget and Spliit integration.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 print(f"Starting Actual-Spliit Sync (version {__version__})")
 
 import time
@@ -205,7 +205,39 @@ def poll_actual(
                                             except Exception as e:
                                                 logger.error(f"Failed to update Spliit expense: {e}")
                                 else:
-                                    logger.debug(f"No correlated split transaction found for {change.id}")
+                                    # No split exists yet - create one (e.g. script was not
+                                    # running when the tag was first added)
+                                    logger.info(
+                                        f"No split transaction found for already-shared transaction "
+                                        f"{change.id} - creating one now"
+                                    )
+                                    original: Transactions = change.from_orm(actual.session)  # type: ignore
+                                    if original is not None:
+                                        spliit_expense_id = None
+                                        if spliit_client:
+                                            try:
+                                                spliit_expense_id = create_spliit_expense(
+                                                    original,
+                                                    changed_columns,
+                                                    spliit_client,
+                                                    actual.session,
+                                                    category_mapping,
+                                                )
+                                                if spliit_expense_id:
+                                                    logger.info(f"Created Spliit expense {spliit_expense_id} for transaction {original.id}")
+                                            except Exception as e:
+                                                logger.error(f"Failed to create Spliit expense: {e}")
+
+                                        create_deposit_transaction(
+                                            original,
+                                            changed_columns,
+                                            actual.session,
+                                            env_splitter_payee,
+                                            env_splitter_account,
+                                            spliit_expense_id=spliit_expense_id,
+                                        )
+                                        local_changes = True
+                                        logger.info(f"Created deposit transaction for previously-unprocessed shared transaction {change.id}")
 
                 if local_changes:
                     actual.commit()
@@ -220,6 +252,11 @@ def poll_actual(
                     existing_transaction_notes_map = {
                         t.id: t.notes for t in existing_transactions if t.id is not None
                     }
+
+                # Close any lingering read transaction so the next iteration's
+                # actual.sync() (which uses a separate session for apply_changes)
+                # is visible to actual.session when it queries again.
+                actual.session.commit()
 
         except Exception as e:
             logger.error(f"Error in Actual polling loop: {e}")
