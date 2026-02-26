@@ -2,7 +2,7 @@
 Main synchronization script for Actual Budget and Spliit integration.
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 print(f"Starting Actual-Spliit Sync (version {__version__})")
 
 import time
@@ -205,8 +205,17 @@ def poll_actual(
                                             except Exception as e:
                                                 logger.error(f"Failed to update Spliit expense: {e}")
                                 else:
-                                    # No split exists yet - create one (e.g. script was not
-                                    # running when the tag was first added)
+                                    # No split exists yet. Only create one if this is a
+                                    # manual edit (no financial_id in changeset). Bank sync
+                                    # updates include financial_id and the split already
+                                    # exists in an old format - creating would duplicate it.
+                                    if changed_columns.get("financial_id") is not None:
+                                        logger.warning(
+                                            f"No split found for already-shared transaction "
+                                            f"{change.id} during bank sync update - skipping "
+                                            f"to avoid duplicates (split may exist in old format)"
+                                        )
+                                        continue
                                     logger.info(
                                         f"No split transaction found for already-shared transaction "
                                         f"{change.id} - creating one now"
